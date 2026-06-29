@@ -1,0 +1,9 @@
+# Секреты и локальные данные — НЕ коммитить
+.env
+bot.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
