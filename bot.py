@@ -15,6 +15,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 
 from dotenv import load_dotenv
 from google import genai
@@ -42,7 +43,12 @@ MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
-    "Ты дружелюбный и полезный ассистент. Отвечай чётко и по делу.",
+    "Ты дружелюбный и полезный ассистент в Telegram. Отвечай чётко и по делу. "
+    "ВАЖНО: не используй Markdown-разметку. Никаких звёздочек (* и **), "
+    "решёток (#), подчёркиваний (_) и обратных кавычек для выделения текста — "
+    "Telegram их не отображает, и они показываются как обычные символы. "
+    "Пиши простым текстом. Для списков используй тире или цифры. Если нужно "
+    "что-то выделить — обойдись словами или заглавными буквами, без спецсимволов.",
 )
 
 MAX_HISTORY = 20            # сколько последних сообщений брать из истории
@@ -176,7 +182,7 @@ async def _generate_and_stream(
 
             now = asyncio.get_event_loop().time()
             if now - last_update >= STREAM_UPDATE_INTERVAL:
-                preview = full_answer[:TELEGRAM_LIMIT]
+                preview = _clean_markdown(full_answer)[:TELEGRAM_LIMIT]
                 if preview != last_shown and preview.strip():
                     try:
                         await sent.edit_text(preview)
@@ -194,8 +200,11 @@ async def _generate_and_stream(
         await sent.edit_text("(пустой ответ)")
         return
 
+    # Чистим Markdown-символы перед отправкой (Telegram их не рендерит)
+    answer = _clean_markdown(full_answer)
+
     # Финальный вывод. Длинные ответы режем под лимит Telegram.
-    chunks = _split_text(full_answer, TELEGRAM_LIMIT)
+    chunks = _split_text(answer, TELEGRAM_LIMIT)
     try:
         await sent.edit_text(chunks[0])
     except BadRequest:
@@ -203,7 +212,19 @@ async def _generate_and_stream(
     for extra in chunks[1:]:
         await update.message.reply_text(extra)
 
-    db.add_message(user_id, "model", [{"type": "text", "text": full_answer}])
+    db.add_message(user_id, "model", [{"type": "text", "text": answer}])
+
+
+# Убираем Markdown-разметку, которую Telegram показывает как символы:
+# звёздочки (* и **), обратные кавычки (` и ```), заголовки в начале строк (#).
+_MD_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]*", re.MULTILINE)
+
+
+def _clean_markdown(text: str) -> str:
+    text = _MD_HEADING.sub("", text)        # убираем # ## ### в начале строк
+    text = text.replace("*", "")            # убираем все звёздочки
+    text = text.replace("`", "")            # убираем обратные кавычки
+    return text
 
 
 def _split_text(text: str, limit: int) -> list[str]:
